@@ -1,0 +1,5 @@
+*.pdf
+*.txt
+*.vtu
+*.msh
+freefem_matlab_octave_plot-public

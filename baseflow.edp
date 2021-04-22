@@ -1,0 +1,142 @@
+//////////////////////////////////////////////////////////////////////////////////
+//primary stability on a sudden expansion
+exec("mkdir -p Data");
+exec("mkdir -p Flows");
+load "iovtk"
+include "./freefem_matlab_octave_plot-public/release-v2.0/demos/ffmatlib.idp"
+real Re=100;
+real ni=1/Re;
+
+ofstream RR ("Data/ni.txt");
+ofstream RE ("Data/Re.txt");
+RE<<Re<<endl;
+RR<<ni<<endl;
+
+// labels
+int bclat=4; int bcinlet=1; int bcoutflow=3;
+int bcwall=2;
+
+//short channel length
+real L1=3;
+//long channel length
+real L2=35;
+//short channel diameter (refernce diameter)
+real D1=1;
+//long channel diameter
+real D2=3;
+
+//coordinates for meshing
+real x0=0; real y0=-D1/2;;
+real x1=L1; real y1=y0;
+real x2=x1; real y2=-D2/2;
+real x3=x1+L2; real y3=y2;
+real x4=x3; real y4=-y3;
+real x5=x2; real y5=-y2;
+real x6=x2; real y6=-y1;
+real x7=0; real y7=-y0;
+
+//solid walls
+border a1 (t=0,1){x=x0+(x1-x0)*t; y=y0;label=2;}
+border a2 (t=0,1){x=x1; y=y1+(y2-y1)*t;label=2;}
+border a3 (t=0,1){x=x2+(x3-x2)*t; y=y2;label=2;}
+border a4 (t=0,1){x=x3; y=y3+(y4-y3)*t;}
+border a5 (t=0,1){x=x4+(x5-x4)*t; y=y4;label=2;}
+border a6 (t=0,1){x=x5; y=y5+(y6-y5)*t;label=2;}
+border a7 (t=0,1){x=x6+(x7-x6)*t;y=y6;label=2;}
+border a8 (t=0,1){x=x7; y=y7+(y0-y7)*t;label=1;}
+
+int n1=20; //inlet number of elements
+int n2=20; //number of elements on the short edge
+int n3=50; //number of elements on the expansion edge
+int n4=100; //number of elements on the long edge
+int n5=10; //outlet number of elements
+
+mesh Th = buildmesh(a8(n1)+a1(n2)+a2(n3)+a3(n4)+a4(n5)+a5(n4)+a6(n3)+a7(n2));
+
+savemesh(Th, "Flows/sudden_exp.msh");
+//////////////////////////////////////////////////////////////////////////////////
+real eps=1.e-7;
+
+//finite element spaces
+fespace Vh(Th,P2); //
+fespace Ph(Th,P1); //
+fespace VPh(Th,[P2,P2,P1]);
+//u1 u2 p actual flow
+//du1,du2, dp Newtons's flow
+// v1,v2, q Test function
+VPh [u1,u2,p];
+VPh [v1,v2,q];
+VPh [du1,du2,dp];
+
+//Poiseulle flow initial condition
+func uc = -4*(y-0.5)*(y+0.5);
+
+//macros
+macro div(u1,u2) (dx(u1)+dy(u2)) //
+macro grad(u1,u2) [dx(u1),dy(u2)] //
+macro ugrad(u1,u2,v) (u1*dx(v) + u2*dy(v)) //
+macro Ugrad(u1,u2,v1,v2) [ugrad(u1,u2,v1),ugrad(u1,u2,v2)] //
+
+//Stokes' flow for initial guessing
+solve Stokes ([u1, u2, p],[v1, v2, q], solver=sparsesolver)=
+int2d(Th)(ni*(dx(u1)*dx(v1)+dx(u2)*dx(v2)+dy(u1)*dy(v1)+dy(u2)*dy(v2))-p*div(v1,v2)+q*div(u1,u2)+p*q*eps)
+
++on(bcinlet, u1=1,u2=0)
++on(bcwall, u1=0,u2=0);
+
+//Newton's Navier Stokes solvers
+
+//Navier Stokes
+varf NS ([du1,du2,dp],[v1,v2,q])=
+
+int2d(Th)(
+  Ugrad(u1,u2,u1,u2)'*[v1,v2]
+  +ni*(dx(u1)*dx(v1)+dx(u2)*dx(v2)+dy(u1)*dy(v1)+dy(u2)*dy(v2))
+  -p*div(v1,v2)
+  +q*div(u1,u2)+p*q*eps
+);
+
+//Navier Stokes perturbation
+
+varf dNS([du1,du2,dp],[v1,v2,q])=
+
+int2d(Th)(
+  +ni*(dx(du1)*dx(v1)+dx(du2)*dx(v2)+dy(du1)*dy(v1)+dy(du2)*dy(v2))
+  -dp*div(v1,v2)
+  +q*div(du1,du2)+dp*q*eps
+  +Ugrad(du1,du2,u1,u2)'*[v1,v2]
+  +Ugrad(u1,u2,du1,du2)'*[v1,v2]
+  )
+  +on(bcinlet, du1=uc,du2=0)
+  +on(bcwall, du1=0,du2=0)
+  +on(bclat, du1=0,du2=0);
+
+
+  int i=0;
+  for (i=0;i<=20; i++){
+
+    real[int] b=NS(0, VPh); // assemblo il vettore F(u_0)
+    matrix SM=dNS(VPh,VPh); // assemblo la matrice dF(u_0)
+    set(SM, solver=sparsesolver); //opzioni per la soluzione
+    real[int] w = SM^-1*b; //risolve  dF(u_0)*w=F(u_0) ==> w=-du
+
+    u1[] -= w; // un+1=un+du
+
+    if(w.l2<5e-8) break; //controllo sul residuo
+    cout << " iter = "<< i << "  " << w.l2 <<endl;
+
+  }
+
+//plot
+  plot(u1,fill=1,wait=0,value=1,cmm="final U1");
+  plot(u2,fill=1,wait=0,value=1,cmm="final U2");
+  plot(p,fill=1,wait=0,value=1,cmm="final Pressure");
+
+//save baseflow
+int[int] Order = [1,1,1];
+string DataName = "u";
+savevtk("./Sudden_exp"+Re+".vtu", Th, u1,u2,p, dataname=DataName, order=Order);
+
+
+ofstream file("Flows/sudden_exp"+Re+".txt");
+file << u1[];

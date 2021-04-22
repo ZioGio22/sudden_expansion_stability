@@ -1,0 +1,93 @@
+/////////////////////////////////////////////
+/////Linear stability////////////////////////
+/////////////////////////////////////////////
+// run with: mpirun -np 2 FreeFem++-mpi eig_eval.edp
+exec("mkdir -p Eigenvectors");
+exec("mkdir -p Eigenvalues");
+load "PETSc-complex"
+load "SLEPc-complex"
+include "./freefem_matlab_octave_plot-public/release-v2.0/demos/ffmatlib.idp"
+include "macro_ddm.idp"
+
+//macros
+macro div(u1,u2) (dx(u1)+dy(u2)) //
+macro grad(u1,u2) [dx(u1),dy(u2)] //
+macro ugrad(u1,u2,v) (u1*dx(v) + u2*dy(v)) //
+macro Ugrad(u1,u2,v1,v2) [ugrad(u1,u2,v1),ugrad(u1,u2,v2)] //
+macro def(i) [i, i#B, i#C] //
+macro init(i) [i, i, i] //
+
+//read mesh, baseflow and Reynolds number
+real ni;
+real Re;
+ifstream RE("Data/Re.txt");
+ifstream RR("Data/ni.txt");
+RE>>Re;
+RR>>ni;
+mesh Th = readmesh("Flows/sudden_exp.msh");
+
+buildDmesh(Th);
+
+fespace VPh(Th,[P2,P2,P1]);
+
+//VPh<complex> [ub1, ub2,pb]; //baseflow
+VPh [ub1, ub2,pb]; //baseflow
+VPh<complex> [up1,up2,pp]; //perturbated flow
+VPh<complex> [v1,v2,q]; //test function
+ifstream file ("Flows/sudden_exp"+Re+".txt");
+file>> ub1[];
+
+ffSaveData3(ub1, ub2, pb, "Flows/Vectored_baseflow.txt");
+func Pk =[P2,P2,P1];
+
+Mat<complex> J;
+
+createMat(Th,J,Pk)
+
+//matrix A
+varf a([up1,up2,pp],[v1,v2,q])=
+int2d(Th)(Ugrad(up1,up2,ub1,ub2)'*[v1,v2] +Ugrad(ub1,ub2,up1,up2)'*[v1,v2])
+-int2d(Th)(pp*(dx(v1)+dy(v2)))
++int2d(Th)(ni*(dx(up1)*dx(v1)+dx(up2)*dx(v2)+dy(up1)*dy(v1)+dy(up2)*dy(v2)))
++int2d(Th)(q*(dx(up1)+dy(up2)))
++on(2,4,1, up1=0, up2=0);
+
+matrix<complex> Loc=a(VPh,VPh);
+Loc =-Loc;
+J =  Loc;
+
+//matrixB
+varf b([up1,up2,pp],[v1,v2,q])=int2d(Th)(up1*v1+up2*v2);
+matrix<complex> dB=b(VPh,VPh);
+Mat<complex> M(J,dB,clean = true);
+
+//number of eigenvalues
+int nEV=3;
+
+//array to store eigenvalues
+complex [int] eigv(nEV);
+
+//array to store eigenvectors
+VPh<complex>[int] def(evec)(nEV);
+
+//shif invert point
+//complex S=0.2+2*pi*0.17*1i;
+complex S=0.05;
+
+string params = "-eps_tol 1.0e-6 -eps_nev " + nEV + " " +
+    "-eps_type krylovschur -st_type sinvert -eps_monitor_all " +
+    "-eps_target " + real(S) + "+" + imag(S) + "i";
+
+int k = EPSSolve(J,M,vectors = evec, values = eigv, sparams = params);
+
+k=min(k,nEV);
+cout<<k<<endl;
+int i=0;
+int j=0;
+ffSaveVh(Th,VPh,"Flows/sudden_exp_VPh.txt");
+ofstream eig ("Eigenvalues/eig.txt");
+for(i=0; i<k; i++){
+  j=i+1;
+  eig << real(eigv[i])<< " "<< imag(eigv[i])<<endl;
+  ffSaveData3(evec[i], evecB[i], evecC[i], "Eigenvectors/vectorized_eigenvectors_"+j+".txt");
+}
